@@ -1,45 +1,48 @@
-from fastapi import FastAPI, File, UploadFile
+from fastapi import FastAPI, UploadFile, File
 from ultralytics import YOLO
-import shutil
-import uuid
-import os
+from PIL import Image
+import io
+import base64
 
-app = FastAPI(title="Cheque Field Detection API")
+app = FastAPI()
 
 # Load model once at startup
 model = YOLO("best.pt")
 
-@app.get("/")
-def home():
-    return {"message": "Cheque Detection API Running"}
+@app.post("/detect/")
+async def detect(file: UploadFile = File(...)):
+    contents = await file.read()
+    image = Image.open(io.BytesIO(contents)).convert("RGB")
 
-@app.post("/predict")
-async def predict(file: UploadFile = File(...)):
-
-    temp_filename = f"{uuid.uuid4()}.jpg"
-
-    with open(temp_filename, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
-
-    results = model.predict(temp_filename, conf=0.25)
+    results = model(image)
 
     detections = []
+    original_img = results[0].plot()  # image with bounding boxes
+
+    # Convert full image with boxes to base64
+    full_buffer = io.BytesIO()
+    Image.fromarray(original_img).save(full_buffer, format="PNG")
+    full_base64 = base64.b64encode(full_buffer.getvalue()).decode()
 
     for box in results[0].boxes:
-        cls_id = int(box.cls)
-        conf = float(box.conf)
-        class_name = model.names[cls_id]
-        coords = box.xyxy.tolist()[0]
+        cls = int(box.cls)
+        label = model.names[cls]
+        x1, y1, x2, y2 = map(int, box.xyxy[0])
+
+        # Crop detected region
+        cropped = image.crop((x1, y1, x2, y2))
+
+        crop_buffer = io.BytesIO()
+        cropped.save(crop_buffer, format="PNG")
+        crop_base64 = base64.b64encode(crop_buffer.getvalue()).decode()
 
         detections.append({
-            "field": class_name,
-            "confidence": round(conf, 3),
-            "bbox": coords
+            "field_name": label,
+            "coordinates": [x1, y1, x2, y2],
+            "cropped_image_base64": crop_base64
         })
 
-    os.remove(temp_filename)
-
     return {
-        "status": "success",
+        "full_image_with_boxes_base64": full_base64,
         "detections": detections
     }
