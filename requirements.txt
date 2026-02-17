@@ -3,3 +3,4 @@ uvicorn
 ultralytics
 pillow
 numpy
+python-multipart
